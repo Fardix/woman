@@ -1,0 +1,9 @@
+[project]
+name = "woman"
+version = "0.1.0"
+description = "A CLI tool that describes Unix commands using the Gemini API"
+dependencies = ["requests"]
+requires-python = ">=3.7"
+
+[project.scripts]
+woman = "woman.__main__:main"
