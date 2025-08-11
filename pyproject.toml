@@ -1,8 +1,11 @@
 [project]
 name = "woman"
-version = "0.1.0"
+version = "0.1.1"
 description = "A CLI tool that describes Unix commands using the Gemini API"
-dependencies = ["requests"]
+authors = [
+    { name="Fardix", email="Fardixxx@proton.me" }
+]
+dependencies = ["requests", "colorama"]
 requires-python = ">=3.7"
 
 [project.scripts]
