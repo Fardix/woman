@@ -18,21 +18,46 @@ def prompt_and_save_key():
     return True
 
 
-def explain_command(command):
+def call_gemini(prompt):
     api_key = load_api_key()
     if not api_key:
-        # Prompt and save key, then reload
         print("No API key found. Please enter it now.")
         ok = prompt_and_save_key()
         if not ok:
             print("API key not set. Aborting.")
-            return
+            return None
         api_key = load_api_key()
         if not api_key:
             print("Failed to save API key. Aborting.")
-            return
+            return None
 
-    # Gemini prompt requesting strict JSON (note: braces doubled to escape f-string)
+    headers = {"Content-Type": "application/json"}
+    data = {"contents": [{"parts": [{"text": prompt}]}]}
+
+    try:
+        resp = requests.post(f"{API_URL}?key={api_key}", headers=headers, json=data, timeout=30)
+    except requests.RequestException as e:
+        print(f"Network error while calling API: {e}")
+        return None
+
+    if resp.status_code != 200:
+        print(f"Error: {resp.status_code} from API.")
+        try:
+            print(resp.json())
+        except Exception:
+            print(resp.text)
+        return None
+
+    try:
+        resp_json = resp.json()
+        return resp_json["candidates"][0]["content"]["parts"][0]["text"].strip()
+    except (ValueError, KeyError, IndexError, TypeError):
+        print("Error: unexpected API response format.")
+        print(json.dumps(resp.json(), indent=2))
+        return None
+
+
+def explain_command(command):
     prompt = f"""
 You are a Linux CLI documentation expert.
 Explain concisely the command '{command}' in the following JSON format only:
@@ -50,75 +75,96 @@ Include only the most important 2-5 options.
 Include one useful example if possible.
 Do not include extra commentary or text outside of JSON.
 """
-
-    headers = {"Content-Type": "application/json"}
-    data = {"contents": [{"parts": [{"text": prompt}]}]}
-
-    try:
-        resp = requests.post(f"{API_URL}?key={api_key}", headers=headers, json=data, timeout=30)
-    except requests.RequestException as e:
-        print(f"Network error while calling API: {e}")
+    text_output = call_gemini(prompt)
+    if not text_output:
         return
 
-    if resp.status_code != 200:
-        # Print helpful error details
-        print(f"Error: {resp.status_code} from API.")
-        try:
-            print(resp.json())
-        except Exception:
-            print(resp.text)
-        return
-
-    # Try to extract text safely from API response
-    try:
-        resp_json = resp.json()
-    except ValueError:
-        print("Error: API returned non-JSON response.")
-        print(resp.text)
-        return
-
-    try:
-        text_output = resp_json["candidates"][0]["content"]["parts"][0]["text"].strip()
-    except (KeyError, IndexError, TypeError):
-        print("Error: unexpected API response format.")
-        print(json.dumps(resp_json, indent=2))
-        return
-
-    # Try parsing the returned text as JSON. If that fails, try to find a JSON substring.
     try:
         data_json = json.loads(text_output)
-        print_response(data_json)
     except json.JSONDecodeError:
-        # Attempt to find a JSON object inside the text (best-effort)
         start = text_output.find("{")
         end = text_output.rfind("}")
         if start != -1 and end != -1 and end > start:
             try:
-                data_json = json.loads(text_output[start : end + 1])
-                print_response(data_json)
-                return
+                data_json = json.loads(text_output[start:end + 1])
             except json.JSONDecodeError:
-                pass
+                print("⚠️ API returned non-JSON output. Showing raw response:")
+                print(text_output)
+                return
+        else:
+            print("⚠️ API returned non-JSON output. Showing raw response:")
+            print(text_output)
+            return
 
-        # Final fallback: show raw output with warning
-        print("⚠️ Warning: API returned non-JSON output. Showing raw response:")
-        print(text_output)
+    print_response(data_json)
+
+
+def find_command_for_purpose(purpose):
+    prompt = f"""
+You are a Linux command expert.
+Given the task: "{purpose}", return the **best matching Linux command(s)** in this JSON format only:
+
+{{
+  "command": "the exact command to run",
+  "description": "what it does",
+  "options": [
+    {{"flag": "-x", "desc": "option description"}}
+  ],
+  "example": "example usage if needed"
+}}
+
+If there are multiple valid commands, choose the most common one.
+Do not output anything outside of JSON.
+"""
+    text_output = call_gemini(prompt)
+    if not text_output:
+        return
+
+    try:
+        data_json = json.loads(text_output)
+    except json.JSONDecodeError:
+        start = text_output.find("{")
+        end = text_output.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            try:
+                data_json = json.loads(text_output[start:end + 1])
+            except json.JSONDecodeError:
+                print("⚠️ API returned non-JSON output. Showing raw response:")
+                print(text_output)
+                return
+        else:
+            print("⚠️ API returned non-JSON output. Showing raw response:")
+            print(text_output)
+            return
+
+    print_response(data_json)
 
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: woman <command> | woman set-key")
+        print("Usage:")
+        print("  woman <command>          - Explain a command")
+        print("  woman -p \"task to do\"   - Find command for a purpose")
+        print("  woman set-key            - Set API key")
         return
 
     first = sys.argv[1].lower()
+
     if first in ("set-key", "--set-key", "--set_key", "set_key"):
-        # Interactive set-key and exit
         if prompt_and_save_key():
             return
         else:
             sys.exit(1)
 
-    # Otherwise treat everything after the first arg as the command to explain
+    if first == "-p":
+        purpose = " ".join(sys.argv[2:]).strip()
+        if not purpose:
+            print("Error: No purpose given.")
+            return
+        find_command_for_purpose(purpose)
+        return
+
+    # Normal mode: explain command
     command = " ".join(sys.argv[1:])
     explain_command(command)
 
